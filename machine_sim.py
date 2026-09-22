@@ -1,52 +1,53 @@
 import time
-import random
 import json
+import random
 import paho.mqtt.client as mqtt
 
-BROKER = "broker.hivemq.com"
-PORT = 1883
-TOPIC = "fab/sensor/litho_01"
+# Status mesin (Global Flag)
+mesin_hidup = True
 
-# Penyesuaian parameter callback untuk paho-mqtt versi 2
-def on_connect(client, userdata, flags, reason_code, properties=None):
-    if reason_code == 0:
-        print("Status: TERHUBUNG ke Pabrik (MQTT Broker)!")
-    else:
-        print(f"Gagal terhubung, kode error: {reason_code}")
+def on_connect(client, userdata, flags, rc):
+    print("Status: TERHUBUNG ke Pabrik (MQTT Broker)!")
+    # Mesin mendaftarkan diri ke jalur komando khusus
+    client.subscribe("fab/command/litho_01")
 
-# Deklarasi eksplisit API v2
-client = mqtt.Client(mqtt.CallbackAPIVersion.VERSION2, "Litho_Machine_01")
+def on_message(client, userdata, msg):
+    global mesin_hidup
+    pesan = msg.payload.decode()
+    if pesan == "SHUTDOWN":
+        print("\n[!!! ALARM !!!] MENDAPAT PERINTAH SHUTDOWN DARI SERVER!")
+        print("MENGHENTIKAN MESIN LITHOGRAFI SECARA DARURAT...\n")
+        mesin_hidup = False  # Mematikan loop utama
+
+client = mqtt.Client()
 client.on_connect = on_connect
+client.on_message = on_message # Fungsi baru untuk mendengar perintah
+client.connect("broker.hivemq.com", 1883, 60)
+client.loop_start() # Menjalankan pendengar di background
 
 print("Menghubungkan mesin ke jaringan pabrik...")
-client.connect(BROKER, PORT, 60)
-client.loop_start()
+time.sleep(2)
 
-def generate_machine_data():
-    return {
+wafer_count = 0
+# Loop utama hanya berjalan selama mesin belum disuruh mati
+while mesin_hidup:
+    # Simulasi suhu kita naikkan sedikit batas atasnya agar lebih cepat error
+    suhu = round(random.uniform(20.0, 23.5), 2) 
+    tekanan = round(random.uniform(1.0, 1.5), 2)
+    wafer_count += random.randint(10, 50)
+
+    payload = {
         "equipment_id": "LITHO-01",
         "timestamp": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
-        "status": random.choice(["IDLE", "RUNNING", "MAINTENANCE"]),
-        "temperature_c": round(random.uniform(20.0, 23.0), 2),
-        "pressure_bar": round(random.uniform(1.0, 1.5), 2),
-        "wafer_processed": random.randint(100, 500)
+        "status": "RUNNING",
+        "temperature_c": suhu,
+        "pressure_bar": tekanan,
+        "wafer_processed": wafer_count
     }
 
-if __name__ == "__main__":
-    print("Mesin Litografi siap ngirim data metrik via MQTT...\n")
-    try:
-        while True:
-            data = generate_machine_data()
-            payload = json.dumps(data)
-            
-            client.publish(TOPIC, payload)
-            
-            print(f"[{time.strftime('%H:%M:%S')}] Data terkirim ke topik '{TOPIC}':")
-            print(f" -> {payload}\n")
-            
-            time.sleep(2)
-            
-    except KeyboardInterrupt:
-        print("\nMesin dimatikan oleh operator (Ctrl+C).")
-        client.loop_stop()
-        client.disconnect()
+    client.publish("fab/sensor/litho_01", json.dumps(payload))
+    print(f"Mengirim data: Suhu {suhu}°C | Tekanan {tekanan} bar")
+    time.sleep(2)
+
+# Pesan ini hanya muncul jika loop berhenti karena perintah SHUTDOWN
+print("Status Mesin: HALTED (Berhenti Total). Wafer aman dari kerusakan.")

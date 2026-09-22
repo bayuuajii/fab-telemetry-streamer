@@ -2,52 +2,37 @@ import json
 import logging
 import paho.mqtt.client as mqtt
 
-# Setup Logging ke File dan Terminal
-logging.basicConfig(
-    filename="fab_telemetry.log",
-    level=logging.INFO,
-    format="%(asctime)s [%(levelname)s] %(message)s",
-    datefmt="%Y-%m-%d %H:%M:%S"
-)
+logging.basicConfig(filename='fab_telemetry.log', level=logging.INFO,
+                    format='%(asctime)s [%(levelname)s] %(message)s')
 
-BROKER = "broker.hivemq.com"
-PORT = 1883
-TOPIC = "fab/sensor/litho_01"
-
-TEMP_LIMIT = 22.5
-PRESS_LIMIT = 1.35
-
-def on_connect(client, userdata, flags, rc, properties=None):
-    msg = "Status: Server Monitoring & Quality Control (With Logging) Aktif."
-    print(msg)
-    logging.info(msg)
-    client.subscribe(TOPIC)
+def on_connect(client, userdata, flags, rc):
+    print("Status: Server Monitoring & Auto-Control Aktif.")
+    client.subscribe("fab/sensor/litho_01")
 
 def on_message(client, userdata, msg):
-    try:
-        payload = json.loads(msg.payload.decode())
-        eq_id = payload.get("equipment_id")
-        temp = payload.get("temperature_c")
-        press = payload.get("pressure_bar")
-        status = payload.get("status")
+    data = json.loads(msg.payload.decode())
+    suhu = data['temperature_c']
+    tekanan = data['pressure_bar']
+    mesin = data['equipment_id']
 
-        if temp > TEMP_LIMIT or press > PRESS_LIMIT:
-            log_msg = f"[CRITICAL WARNING] Mesin: {eq_id} | Suhu: {temp}°C | Tekanan: {press} bar | ABNORMAL!"
-            print(log_msg)
-            logging.warning(log_msg)
-        else:
-            log_msg = f"[NORMAL] Mesin: {eq_id} | Status: {status} | Suhu: {temp}°C | Tekanan: {press} bar"
-            print(log_msg)
-            logging.info(log_msg)
+    # Logika Deteksi
+    if suhu > 22.5 or tekanan > 1.4:
+        peringatan = f"Mesin: {mesin} | Suhu: {suhu}°C | Tekanan: {tekanan} bar | ABNORMAL!"
+        print(f"[CRITICAL WARNING] {peringatan}")
+        logging.warning(peringatan)
 
-    except Exception as e:
-        err_msg = f"Error membaca data: {e}"
-        print(err_msg)
-        logging.error(err_msg)
+        # LOGIKA CLOSED-LOOP CONTROL (REAKSI OTOMATIS)
+        if suhu > 22.5:
+            print(f"[AUTO-CONTROL] Suhu melebihi 22.5°C! Menembakkan perintah SHUTDOWN ke {mesin}...")
+            client.publish("fab/command/litho_01", "SHUTDOWN")
+            logging.critical(f"SHUTDOWN command auto-fired to {mesin} due to temp ({suhu}°C)")
+    else:
+        normal_msg = f"Mesin: {mesin} | Status: {data['status']} | Suhu: {suhu}°C | Tekanan: {tekanan} bar"
+        print(f"[NORMAL] {normal_msg}")
+        logging.info(normal_msg)
 
-client = mqtt.Client(mqtt.CallbackAPIVersion.VERSION2)
+client = mqtt.Client()
 client.on_connect = on_connect
 client.on_message = on_message
-
-client.connect(BROKER, PORT, 60)
+client.connect("broker.hivemq.com", 1883, 60)
 client.loop_forever()
